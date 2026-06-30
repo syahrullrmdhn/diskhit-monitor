@@ -41,11 +41,11 @@ GOOS=windows GOARCH=amd64 go build -o diskhist.exe ./cmd/diskhist
 go build -o diskhist.exe ./cmd/diskhist
 ```
 
-## Cara Install sebagai Windows Service
+### Install sebagai Windows Service
 
 ```powershell
-# Jalankan sebagai Administrator
-diskhist.exe install
+# Jalankan sebagai Administrator di PowerShell
+.\diskhist.exe install
 
 # Set auto-restart jika crash (NFR-06)
 sc.exe failure "DiskHistMonitor" reset= 86400 actions= restart/60000/restart/300000/restart/600000
@@ -58,7 +58,7 @@ curl http://localhost:8787/healthz
 
 # Uninstall
 sc.exe stop DiskHistMonitor
-diskhist.exe uninstall
+.\diskhist.exe uninstall
 ```
 
 ## Konfigurasi
