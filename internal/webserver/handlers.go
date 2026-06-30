@@ -38,37 +38,35 @@ func (s *Server) handleTopGrowers(w http.ResponseWriter, r *http.Request) {
 	if d, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && d > 0 {
 		days = d
 	}
-
-	since := time.Now().AddDate(0, 0, -days)
+	_ = days // used for future filtering if needed
 
 	rows, err := s.db.Query(`
 		SELECT
-			curr.folder_path,
-			curr.size_bytes AS current_size,
-			COALESCE(prev.size_bytes, 0) AS previous_size,
-			(curr.size_bytes - COALESCE(prev.size_bytes, 0)) AS growth_bytes,
+			ranked.folder_path,
+			ranked.current_size,
+			COALESCE(ranked.prev_size, 0) AS prev_size,
+			(ranked.current_size - COALESCE(ranked.prev_size, 0)) AS growth_bytes,
 			CASE
-				WHEN COALESCE(prev.size_bytes, 0) > 0
-				THEN ROUND(((curr.size_bytes - prev.size_bytes) * 100.0) / prev.size_bytes, 1)
+				WHEN COALESCE(ranked.prev_size, 0) > 0
+				THEN ROUND(((ranked.current_size - ranked.prev_size) * 100.0) / ranked.prev_size, 1)
 				ELSE 100.0
 			END AS growth_pct,
-			curr.depth_level
+			ranked.depth_level
 		FROM (
-			SELECT folder_path, depth_level, size_bytes,
+			SELECT
+				folder_path,
+				depth_level,
+				size_bytes AS current_size,
+				LAG(size_bytes) OVER (PARTITION BY folder_path ORDER BY start_date) AS prev_size,
 				ROW_NUMBER() OVER (PARTITION BY folder_path ORDER BY start_date DESC) AS rn
 			FROM folder_metrics
 			WHERE is_active = 1
-		) curr
-		LEFT JOIN (
-			SELECT folder_path, size_bytes,
-				ROW_NUMBER() OVER (PARTITION BY folder_path ORDER BY start_date DESC) AS rn
-			FROM folder_metrics
-			WHERE start_date <= ? AND is_active = 1
-		) prev ON curr.folder_path = prev.folder_path AND prev.rn = 1
-		WHERE curr.rn = 1 AND (curr.size_bytes - COALESCE(prev.size_bytes, 0)) > 0
+		) ranked
+		WHERE ranked.rn = 1
+		  AND (ranked.current_size - COALESCE(ranked.prev_size, 0)) > 0
 		ORDER BY growth_bytes DESC
 		LIMIT 10
-	`, since)
+	`)
 	if err != nil {
 		http.Error(w, "query error: "+err.Error(), http.StatusInternalServerError)
 		return

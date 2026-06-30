@@ -151,7 +151,7 @@ func (s *Scanner) persist(drive string, sizes map[string]int64, result Result) e
 		var existingID int64
 		var existingSize int64
 		err := tx.QueryRow(
-			`SELECT id, size_bytes FROM folder_metrics WHERE folder_path = ? AND is_active = 1`,
+			`SELECT id, size_bytes FROM folder_metrics WHERE folder_path = ? AND is_active = 1 AND end_date IS NULL`,
 			path,
 		).Scan(&existingID, &existingSize)
 
@@ -193,7 +193,7 @@ func (s *Scanner) persist(drive string, sizes map[string]int64, result Result) e
 
 	// Tandai folder yang dulu aktif tapi sekarang tidak ditemukan lagi sebagai
 	// tidak aktif (folder terhapus dari disk) - lihat Bagian 2.4.
-	rows, err := tx.Query(`SELECT id, folder_path FROM folder_metrics WHERE is_active = 1`)
+	rows, err := tx.Query(`SELECT id, folder_path FROM folder_metrics WHERE is_active = 1 AND end_date IS NULL`)
 	if err != nil {
 		return fmt.Errorf("gagal query folder aktif untuk deteksi penghapusan: %w", err)
 	}
