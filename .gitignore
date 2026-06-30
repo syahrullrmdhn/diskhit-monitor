@@ -1,0 +1,18 @@
+# Binaries
+diskhist
+diskhist.exe
+
+# Database & logs (runtime data, not source)
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp

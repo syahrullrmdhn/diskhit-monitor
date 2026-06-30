@@ -1,0 +1,23 @@
+# config.yaml — DiskHist Monitor Configuration
+# Lihat PRD/SRS Bagian 2.5 untuk penjelasan lengkap setiap field.
+
+drives:
+  - "D:\\"
+  # - "E:\\"   # uncomment untuk memantau drive tambahan
+
+max_depth: 5
+
+# Format cron-like standar (menit jam tanggal bulan hari-minggu)
+# Contoh di bawah: setiap hari pukul 02:00
+schedule: "0 2 * * *"
+
+retention:
+  mode: "aggregate"     # "aggregate" atau "delete"
+  retain_raw_days: 30
+
+web_server:
+  port: 8787
+  bind_address: "127.0.0.1"   # sengaja localhost saja, tidak 0.0.0.0
+
+database_path: "C:\\ProgramData\\DiskHistMonitor\\diskhist.db"
+log_path: "C:\\ProgramData\\DiskHistMonitor\\agent.log"

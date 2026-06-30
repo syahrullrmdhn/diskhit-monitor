@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DiskHist Monitor</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    .header {
+      background: #1e293b;
+      border-bottom: 1px solid #334155;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: #f1f5f9;
+    }
+    .header h1 span { color: #22d3ee; }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .health-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 500;
+    }
+    .health-badge.ok { background: #064e3b; color: #6ee7b7; }
+    .health-badge.warn { background: #78350f; color: #fcd34d; }
+    .health-badge.error { background: #7f1d1d; color: #fca5a5; }
+    .health-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    /* Stats cards */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 20px;
+    }
+    .stat-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #94a3b8;
+      margin-bottom: 8px;
+    }
+    .stat-value {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: #f1f5f9;
+      font-variant-numeric: tabular-nums;
+    }
+    .stat-sub {
+      font-size: 0.8rem;
+      color: #64748b;
+      margin-top: 4px;
+    }
+
+    /* Panels */
+    .panel {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      margin-bottom: 24px;
+      overflow: hidden;
+    }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid #334155;
+    }
+    .panel-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #f1f5f9;
+    }
+    .panel-body { padding: 20px; }
+
+    /* Controls */
+    select, button {
+      font-family: inherit;
+      font-size: 0.85rem;
+      border-radius: 6px;
+      border: 1px solid #475569;
+      background: #334155;
+      color: #e2e8f0;
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+    select:hover, button:hover { border-color: #64748b; }
+    .btn-primary {
+      background: #0ea5e9;
+      border-color: #0ea5e9;
+      color: #fff;
+    }
+    .btn-primary:hover { background: #0284c7; }
+    .btn-export {
+      background: #059669;
+      border-color: #059669;
+      color: #fff;
+    }
+    .btn-export:hover { background: #047857; }
+
+    /* Table */
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .data-table th {
+      text-align: left;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #94a3b8;
+      padding: 12px 16px;
+      border-bottom: 1px solid #334155;
+    }
+    .data-table td {
+      padding: 12px 16px;
+      border-bottom: 1px solid #1e293b;
+      font-size: 0.875rem;
+      font-variant-numeric: tabular-nums;
+    }
+    .data-table tr:hover td { background: #334155; }
+    .data-table .path-cell {
+      max-width: 400px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #22d3ee;
+      cursor: pointer;
+    }
+    .data-table .path-cell:hover { text-decoration: underline; }
+    .growth-positive { color: #f87171; }
+    .growth-negative { color: #34d399; }
+
+    /* Chart */
+    .chart-container {
+      position: relative;
+      height: 300px;
+      width: 100%;
+    }
+
+    /* Status */
+    .status-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 500;
+    }
+    .status-success { background: #064e3b; color: #6ee7b7; }
+    .status-partial { background: #78350f; color: #fcd34d; }
+    .status-failed { background: #7f1d1d; color: #fca5a5; }
+
+    .empty-state {
+      text-align: center;
+      padding: 48px 20px;
+      color: #64748b;
+    }
+    .empty-state p { margin-top: 8px; font-size: 0.9rem; }
+
+    .controls-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .container { padding: 16px; }
+      .panel-body { padding: 12px; }
+      .data-table { font-size: 0.8rem; }
+      .data-table td, .data-table th { padding: 8px 10px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1><span>DiskHist</span> Monitor</h1>
+    <div class="header-right">
+      <span class="health-badge ok" id="healthBadge">
+        <span class="health-dot"></span>
+        <span id="healthText">Loading...</span>
+      </span>
+    </div>
+  </div>
+
+  <div class="container">
+    <!-- Stats -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Uptime</div>
+        <div class="stat-value" id="statUptime">-</div>
+        <div class="stat-sub" id="statUptimeSub"></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Last Scan</div>
+        <div class="stat-value" id="statLastScan">-</div>
+        <div class="stat-sub" id="statLastScanSub"></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Scan Status</div>
+        <div class="stat-value" id="statScanStatus">-</div>
+        <div class="stat-sub" id="statScanStatusSub"></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Skipped Folders</div>
+        <div class="stat-value" id="statSkipped">-</div>
+        <div class="stat-sub">during last scan</div>
+      </div>
+    </div>
+
+    <!-- Top Growers -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Top Growing Folders</div>
+        <div class="controls-row">
+          <select id="daysSelect" onchange="loadTopGrowers()">
+            <option value="1">Last 24 hours</option>
+            <option value="7" selected>Last 7 days</option>
+            <option value="14">Last 14 days</option>
+            <option value="30">Last 30 days</option>
+          </select>
+          <button class="btn-export" onclick="exportCSV()">Export CSV</button>
+        </div>
+      </div>
+      <div class="panel-body" style="padding:0;">
+        <table class="data-table" id="growersTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Folder</th>
+              <th>Current Size</th>
+              <th>Previous Size</th>
+              <th>Growth</th>
+              <th>Growth %</th>
+            </tr>
+          </thead>
+          <tbody id="growersBody">
+            <tr><td colspan="6" class="empty-state">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Folder History Chart -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Folder History</div>
+        <div class="controls-row">
+          <input type="text" id="folderPathInput" placeholder="Enter folder path..."
+                 style="width:300px; padding:6px 12px; border-radius:6px; border:1px solid #475569; background:#334155; color:#e2e8f0; font-size:0.85rem;">
+          <button class="btn-primary" onclick="loadFolderHistory()">Load</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="chart-container">
+          <canvas id="historyChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scan History -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Scan History</div>
+      </div>
+      <div class="panel-body" style="padding:0;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Drive</th>
+              <th>Total Size</th>
+              <th>Status</th>
+              <th>Skipped</th>
+            </tr>
+          </thead>
+          <tbody id="scanHistoryBody">
+            <tr><td colspan="5" class="empty-state">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- Helpers ---
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    function formatUptime(seconds) {
+      if (seconds < 60) return seconds + 's';
+      if (seconds < 3600) return Math.floor(seconds / 60) + 'm';
+      if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ' + Math.floor((seconds % 3600) / 60) + 'm';
+      return Math.floor(seconds / 86400) + 'd ' + Math.floor((seconds % 86400) / 3600) + 'h';
+    }
+
+    function formatTime(iso) {
+      if (!iso || iso === '0001-01-01T00:00:00Z') return 'Never';
+      const d = new Date(iso);
+      return d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) +
+             ' ' + d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function statusClass(s) {
+      if (s === 'success') return 'status-success';
+      if (s === 'partial') return 'status-partial';
+      return 'status-failed';
+    }
+
+    // --- Health ---
+    async function loadHealth() {
+      try {
+        const resp = await fetch('/healthz');
+        const data = await resp.json();
+
+        document.getElementById('statUptime').textContent = formatUptime(data.uptime_seconds);
+        document.getElementById('statUptimeSub').textContent = data.uptime_seconds + ' seconds';
+        document.getElementById('statLastScan').textContent = formatTime(data.last_scan_time);
+        document.getElementById('statLastScanSub').textContent = data.last_scan_status || '-';
+        document.getElementById('statScanStatus').innerHTML = '<span class="status-badge ' + statusClass(data.last_scan_status) + '">' + (data.last_scan_status || '-') + '</span>';
+        document.getElementById('statSkipped').textContent = data.skipped_count || 0;
+
+        const badge = document.getElementById('healthBadge');
+        const text = document.getElementById('healthText');
+        if (data.last_scan_status === 'success' || data.last_scan_status === 'partial') {
+          badge.className = 'health-badge ok';
+          text.textContent = 'Healthy';
+        } else if (data.last_scan_status === 'failed') {
+          badge.className = 'health-badge warn';
+          text.textContent = 'Last scan failed';
+        } else {
+          badge.className = 'health-badge warn';
+          text.textContent = 'No scans yet';
+        }
+      } catch (e) {
+        document.getElementById('healthBadge').className = 'health-badge error';
+        document.getElementById('healthText').textContent = 'Unreachable';
+      }
+    }
+
+    // --- Top Growers ---
+    async function loadTopGrowers() {
+      const days = document.getElementById('daysSelect').value;
+      try {
+        const resp = await fetch('/api/top-growers?days=' + days);
+        const data = await resp.json();
+        const tbody = document.getElementById('growersBody');
+
+        if (!data || data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="empty-state"><p>No growth data available yet. Wait for at least 2 scans to compare.</p></td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = data.map((g, i) => `
+          <tr>
+            <td>${i + 1}</td>
+            <td class="path-cell" onclick="showHistory('${g.path.replace(/'/g, "\\'")}')" title="${g.path}">${g.path}</td>
+            <td>${formatBytes(g.current_size)}</td>
+            <td>${formatBytes(g.previous_size)}</td>
+            <td class="growth-positive">+${formatBytes(g.growth_bytes)}</td>
+            <td class="growth-positive">+${g.growth_pct}%</td>
+          </tr>
+        `).join('');
+      } catch (e) {
+        console.error('Failed to load top growers:', e);
+      }
+    }
+
+    // --- Folder History ---
+    let historyChart = null;
+
+    function showHistory(path) {
+      document.getElementById('folderPathInput').value = path;
+      loadFolderHistory();
+      document.getElementById('folderPathInput').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    async function loadFolderHistory() {
+      const path = document.getElementById('folderPathInput').value.trim();
+      if (!path) return;
+
+      try {
+        const resp = await fetch('/api/folder-history?path=' + encodeURIComponent(path));
+        const data = await resp.json();
+
+        const labels = data.map(p => {
+          const d = new Date(p.start_date);
+          return d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
+        });
+        const sizes = data.map(p => p.size_bytes);
+
+        if (historyChart) historyChart.destroy();
+
+        const ctx = document.getElementById('historyChart').getContext('2d');
+        historyChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [{
+              label: path,
+              data: sizes,
+              borderColor: '#22d3ee',
+              backgroundColor: 'rgba(34, 211, 238, 0.1)',
+              fill: true,
+              tension: 0.3,
+              pointRadius: 4,
+              pointBackgroundColor: '#22d3ee',
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: function(ctx) { return formatBytes(ctx.parsed.y); }
+                }
+              }
+            },
+            scales: {
+              y: {
+                ticks: {
+                  color: '#94a3b8',
+                  callback: function(v) { return formatBytes(v); }
+                },
+                grid: { color: '#334155' }
+              },
+              x: {
+                ticks: { color: '#94a3b8' },
+                grid: { color: '#334155' }
+              }
+            }
+          }
+        });
+      } catch (e) {
+        console.error('Failed to load folder history:', e);
+      }
+    }
+
+    // --- Scan History ---
+    async function loadScanHistory() {
+      try {
+        const resp = await fetch('/api/scan-history?limit=10');
+        const data = await resp.json();
+        const tbody = document.getElementById('scanHistoryBody');
+
+        if (!data || data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="5" class="empty-state"><p>No scan history yet.</p></td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = data.map(s => `
+          <tr>
+            <td>${formatTime(s.scan_date)}</td>
+            <td>${s.drive_letter}</td>
+            <td>${formatBytes(s.total_size_bytes)}</td>
+            <td><span class="status-badge ${statusClass(s.status)}">${s.status}</span></td>
+            <td>${s.skipped_count}</td>
+          </tr>
+        `).join('');
+      } catch (e) {
+        console.error('Failed to load scan history:', e);
+      }
+    }
+
+    // --- Export ---
+    function exportCSV() {
+      const days = document.getElementById('daysSelect').value;
+      window.open('/api/export-csv?days=' + days, '_blank');
+    }
+
+    // --- Init ---
+    loadHealth();
+    loadTopGrowers();
+    loadScanHistory();
+    setInterval(loadHealth, 30000); // refresh health every 30s
+  </script>
+</body>
+</html>
