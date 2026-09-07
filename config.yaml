@@ -13,7 +13,16 @@ schedule: "0 2 * * *"
 
 retention:
   mode: "aggregate"     # "aggregate" atau "delete"
-  retain_raw_days: 30
+  retain_raw_days: 90
+
+accuracy:
+  vss_mode: "required"          # required = gagal eksplisit bila VSS tidak tersedia
+  collect_allocated_size: true  # simpan juga Windows Properties "Size on disk"
+
+resources:
+  scan_timeout: "2h"
+  command_timeout: "2m"
+  single_scan: true              # trigger tumpang tindih akan dilewati
 
 web_server:
   port: 8787

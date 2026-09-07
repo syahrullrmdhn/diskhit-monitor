@@ -22,6 +22,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -82,8 +84,8 @@ func printUsage() {
 // runAsWindowsService menjalankan logic yang sama dengan runForeground()
 // tapi melalui Windows Service Control Manager.
 func runAsWindowsService() {
-	err := winservice.RunAsService(func() {
-		runCore()
+	err := winservice.RunAsService(func(ctx context.Context) {
+		runCore(ctx)
 	})
 	if err != nil {
 		log.Fatalf("[FATAL] gagal menjalankan Windows Service: %v", err)
@@ -92,12 +94,12 @@ func runAsWindowsService() {
 
 // runForeground menjalankan scanner + web server langsung di proses ini.
 func runForeground() {
-	runCore()
+	runCore(context.Background())
 }
 
 // runCore menjalankan seluruh logic inti: config → DB → scanner → webserver → cron.
-// Dipanggil baik dari mode foreground maupun Windows Service.
-func runCore() {
+// Parent context berasal dari SCM pada service mode dan dibatalkan saat Stop.
+func runCore(parent context.Context) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		log.Fatalf("[FATAL] gagal load config: %v", err)
@@ -122,6 +124,8 @@ func runCore() {
 
 	status := webserver.NewStatusTracker()
 	srv := webserver.New(cfg.WebServer.BindAddress, cfg.WebServer.Port, status, store.DB())
+	scanCtx, cancelScans := context.WithCancel(parent)
+	var scanWG sync.WaitGroup
 
 	// Web server berjalan di goroutine sendiri (FR-09: independen dari scanner).
 	go func() {
@@ -130,29 +134,45 @@ func runCore() {
 		}
 	}()
 
-	scn := scanner.New(store.DB(), cfg.MaxDepth)
+	scn := scanner.NewWithOptions(store.DB(), cfg.MaxDepth, scanner.Options{
+		UseVSS:           cfg.Accuracy.VSSMode == "required",
+		CollectAllocated: cfg.Accuracy.CollectAllocatedSize,
+		ScanTimeout:      cfg.Resources.ScanTimeout,
+		CommandTimeout:   cfg.Resources.CommandTimeout,
+	})
 	ret := retention.New(store.DB(), cfg.Retention.Mode, cfg.Retention.RetainRawDays)
+	var scanBatchRunning atomic.Bool
 
 	// runScanSafely membungkus pemanggilan scanner dengan recover(),
 	// sesuai NFR-06.
 	runScanSafely := func() {
+		if !scanBatchRunning.CompareAndSwap(false, true) {
+			log.Printf("[WARN] jadwal scan dilewati karena batch scan sebelumnya masih berjalan")
+			return
+		}
+		defer scanBatchRunning.Store(false)
 		defer func() {
 			if rec := recover(); rec != nil {
 				log.Printf("[ERROR] panic ditangkap saat menjalankan scan: %v (proses tetap berjalan, web server tidak terpengaruh)", rec)
 			}
 		}()
 		for _, drive := range cfg.Drives {
-			result := scn.ScanDrive(drive)
+			result := scn.ScanDriveContext(scanCtx, drive)
 			status.RecordScan(result.ScanDate, result.Status, result.SkippedCount)
 		}
 	}
 
 	// Jalankan satu kali saat startup
-	go runScanSafely()
+	scanWG.Add(1)
+	go func() { defer scanWG.Done(); runScanSafely() }()
 
 	// Scheduler cron untuk scan terjadwal
 	c := cron.New()
-	_, err = c.AddFunc(cfg.Schedule, runScanSafely)
+	_, err = c.AddFunc(cfg.Schedule, func() {
+		scanWG.Add(1)
+		defer scanWG.Done()
+		runScanSafely()
+	})
 	if err != nil {
 		log.Fatalf("[FATAL] format 'schedule' di config.yaml tidak valid (%q): %v", cfg.Schedule, err)
 	}
@@ -173,16 +193,39 @@ func runCore() {
 	}
 
 	c.Start()
-	defer c.Stop()
 
 	log.Println("[INFO] diskhist berjalan. Tekan Ctrl+C untuk berhenti (mode foreground).")
 
-	// Graceful shutdown
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	<-sigCh
+	// Graceful shutdown: foreground menunggu OS signal; service menunggu SCM context.
+	stopCh := make(chan struct{})
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		defer signal.Stop(sigCh)
+		select {
+		case <-sigCh:
+		case <-parent.Done():
+		}
+		close(stopCh)
+	}()
+	<-stopCh
 
-	log.Println("[INFO] menerima sinyal stop, melakukan graceful shutdown...")
+	log.Println("[INFO] menerima sinyal stop, membatalkan scheduler dan scan aktif...")
+	cronStopped := c.Stop()
+	cancelScans()
+	select {
+	case <-cronStopped.Done():
+	case <-time.After(cfg.Resources.CommandTimeout + 30*time.Second):
+		log.Printf("[ERROR] timeout menunggu job scheduler berhenti")
+	}
+	scanDone := make(chan struct{})
+	go func() { scanWG.Wait(); close(scanDone) }()
+	select {
+	case <-scanDone:
+		log.Println("[INFO] scan aktif berhenti dan cleanup selesai")
+	case <-time.After(cfg.Resources.CommandTimeout + 30*time.Second):
+		log.Printf("[ERROR] timeout menunggu scan/cleanup VSS; proses akan melanjutkan shutdown")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {

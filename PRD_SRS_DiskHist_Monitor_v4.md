@@ -145,7 +145,7 @@ schedule: "0 2 * * *"
 # mode: "delete"     -> data mentah lebih tua dari retain_raw_days langsung dihapus, tanpa agregasi
 retention:
   mode: "aggregate"     # "aggregate" atau "delete", dipilih oleh pengguna
-  retain_raw_days: 30    # data mentah disimpan selama berapa hari sebelum mode di atas diterapkan
+  retain_raw_days: 90    # minimum 31 hari agar analisis bulanan tetap tersedia
 
 # Port web server dashboard (hanya bind ke localhost/127.0.0.1, tidak ke LAN)
 web_server:

@@ -250,13 +250,12 @@
     <!-- Top Growers -->
     <div class="panel">
       <div class="panel-header">
-        <div class="panel-title">Top Growing Folders</div>
+        <div class="panel-title">Perkembangan Folder & Subfolder</div>
         <div class="controls-row">
           <select id="daysSelect" onchange="loadTopGrowers()">
-            <option value="1">Last 24 hours</option>
-            <option value="7" selected>Last 7 days</option>
-            <option value="14">Last 14 days</option>
-            <option value="30">Last 30 days</option>
+            <option value="1">Harian (dibanding ≥24 jam lalu)</option>
+            <option value="7" selected>Mingguan (dibanding ≥7 hari lalu)</option>
+            <option value="30">Bulanan (dibanding ≥30 hari lalu)</option>
           </select>
           <button class="btn-export" onclick="exportCSV()">Export CSV</button>
         </div>
@@ -309,12 +308,14 @@
               <th>Date</th>
               <th>Drive</th>
               <th>Total Size</th>
+              <th>Size on Disk</th>
+              <th>Consistency</th>
               <th>Status</th>
               <th>Skipped</th>
             </tr>
           </thead>
           <tbody id="scanHistoryBody">
-            <tr><td colspan="5" class="empty-state">Loading...</td></tr>
+            <tr><td colspan="7" class="empty-state">Loading...</td></tr>
           </tbody>
         </table>
       </div>
@@ -401,8 +402,8 @@
             <td class="path-cell" onclick="showHistory('${g.path.replace(/'/g, "\\'")}')" title="${g.path}">${g.path}</td>
             <td>${formatBytes(g.current_size)}</td>
             <td>${formatBytes(g.previous_size)}</td>
-            <td class="growth-positive">+${formatBytes(g.growth_bytes)}</td>
-            <td class="growth-positive">+${g.growth_pct}%</td>
+            <td class="${g.growth_bytes >= 0 ? 'growth-positive' : 'growth-negative'}">${g.growth_bytes >= 0 ? '+' : ''}${formatBytes(g.growth_bytes)}</td>
+            <td class="${g.growth_pct >= 0 ? 'growth-positive' : 'growth-negative'}">${g.growth_pct >= 0 ? '+' : ''}${g.growth_pct}%</td>
           </tr>
         `).join('');
       } catch (e) {
@@ -428,7 +429,7 @@
         const data = await resp.json();
 
         const labels = data.map(p => {
-          const d = new Date(p.start_date);
+          const d = new Date(p.scan_date);
           return d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
         });
         const sizes = data.map(p => p.size_bytes);
@@ -490,7 +491,7 @@
         const tbody = document.getElementById('scanHistoryBody');
 
         if (!data || data.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="5" class="empty-state"><p>No scan history yet.</p></td></tr>';
+          tbody.innerHTML = '<tr><td colspan="7" class="empty-state"><p>No scan history yet.</p></td></tr>';
           return;
         }
 
@@ -499,6 +500,8 @@
             <td>${formatTime(s.scan_date)}</td>
             <td>${s.drive_letter}</td>
             <td>${formatBytes(s.total_size_bytes)}</td>
+            <td>${formatBytes(s.total_allocated_bytes)}</td>
+            <td>${s.consistency || 'live'}</td>
             <td><span class="status-badge ${statusClass(s.status)}">${s.status}</span></td>
             <td>${s.skipped_count}</td>
           </tr>

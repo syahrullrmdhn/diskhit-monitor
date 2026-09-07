@@ -54,8 +54,10 @@ func (s *Store) migrate() error {
 		scan_date DATETIME NOT NULL,
 		drive_letter TEXT NOT NULL,
 		total_size_bytes BIGINT NOT NULL,
+		total_allocated_bytes BIGINT NOT NULL DEFAULT 0,
 		status TEXT NOT NULL CHECK (status IN ('success','partial','failed')),
-		skipped_count INTEGER NOT NULL DEFAULT 0
+		skipped_count INTEGER NOT NULL DEFAULT 0,
+		consistency TEXT NOT NULL DEFAULT 'live'
 	);
 
 	CREATE TABLE IF NOT EXISTS folder_metrics (
@@ -63,16 +65,87 @@ func (s *Store) migrate() error {
 		folder_path TEXT NOT NULL,
 		depth_level INTEGER NOT NULL,
 		size_bytes BIGINT NOT NULL,
+		allocated_bytes BIGINT NOT NULL DEFAULT 0,
 		start_date DATETIME NOT NULL,
 		end_date DATETIME,
 		is_active BOOLEAN NOT NULL DEFAULT 1
 	);
 
+	CREATE TABLE IF NOT EXISTS folder_snapshots_weekly (
+		folder_path TEXT NOT NULL,
+		drive_letter TEXT NOT NULL,
+		week_start DATE NOT NULL,
+		avg_size_bytes BIGINT NOT NULL,
+		min_size_bytes BIGINT NOT NULL,
+		max_size_bytes BIGINT NOT NULL,
+		sample_count INTEGER NOT NULL,
+		PRIMARY KEY(folder_path, drive_letter, week_start)
+	);
+	CREATE INDEX IF NOT EXISTS idx_snapshot_weekly_path ON folder_snapshots_weekly(folder_path);
+
 	CREATE INDEX IF NOT EXISTS idx_folder_metrics_path ON folder_metrics(folder_path);
 	CREATE INDEX IF NOT EXISTS idx_folder_metrics_depth ON folder_metrics(depth_level);
+
+	-- Immutable per-scan snapshots are the source of truth for accurate
+	-- day/week/month comparisons. The legacy differential table remains for
+	-- backward compatibility with existing installations.
+	CREATE TABLE IF NOT EXISTS folder_snapshots (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		scan_id INTEGER NOT NULL,
+		scan_date DATETIME NOT NULL,
+		drive_letter TEXT NOT NULL,
+		folder_path TEXT NOT NULL,
+		depth_level INTEGER NOT NULL,
+		size_bytes BIGINT NOT NULL,
+		allocated_bytes BIGINT NOT NULL DEFAULT 0,
+		FOREIGN KEY(scan_id) REFERENCES scan_history(id) ON DELETE CASCADE
+	);
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_folder_snapshots_scan_path ON folder_snapshots(scan_id, folder_path);
+	CREATE INDEX IF NOT EXISTS idx_folder_snapshots_path_date ON folder_snapshots(folder_path, scan_date);
+	CREATE INDEX IF NOT EXISTS idx_folder_snapshots_date ON folder_snapshots(scan_date);
 	`
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	additions := []struct{ table, column, definition string }{
+		{"scan_history", "total_allocated_bytes", "BIGINT NOT NULL DEFAULT 0"},
+		{"scan_history", "consistency", "TEXT NOT NULL DEFAULT 'live'"},
+		{"folder_metrics", "allocated_bytes", "BIGINT NOT NULL DEFAULT 0"},
+		{"folder_snapshots", "allocated_bytes", "BIGINT NOT NULL DEFAULT 0"},
+	}
+	for _, addition := range additions {
+		exists, err := columnExists(s.db, addition.table, addition.column)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", addition.table, addition.column, addition.definition)); err != nil {
+				return fmt.Errorf("add column %s.%s: %w", addition.table, addition.column, err)
+			}
+		}
+	}
+	return nil
+}
+
+func columnExists(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // Close menutup koneksi database.

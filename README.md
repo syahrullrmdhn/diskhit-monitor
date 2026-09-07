@@ -5,8 +5,14 @@ dalam satu proses, sebagai Windows Service.
 
 ## Fitur
 
-- **Automated Background Scanner** — scan folder secara rekursif hingga kedalaman yang dikonfigurasi
-- **Differential Logging** — hanya simpan perubahan ukuran, hemat ruang database
+- **Exact Recursive Snapshots** — setiap scan menyimpan ukuran logis tiap folder/subfolder (termasuk seluruh turunannya) sampai `max_depth`
+  - Nilai **Size** dihitung dari logical EOF bytes; **Size on disk** dihitung terpisah melalui `GetCompressedFileSizeW`
+  - VSS `ClientAccessible` membuat pandangan point-in-time agar file aktif tidak berubah di tengah scan
+  - Junction/reparse link tidak ditelusuri untuk mencegah loop dan double counting
+  - VSS membutuhkan Windows Service berjalan dengan hak Administrator/LocalSystem dan volume yang mendukung VSS
+  - Scan berstatus `partial` berarti ada path yang tidak dapat dibaca; hasil tidak boleh dianggap lengkap
+- **Analisis Periode Nyata** — perbandingan harian, mingguan, dan bulanan memakai snapshot pada/ sebelum titik waktu pembanding
+- **Differential Logging** — data kompatibilitas lama tetap dipelihara; snapshot immutable menjadi sumber analitik akurat
 - **Web Dashboard** — akses via browser di `http://localhost:8787`
   - Top 10 Growing Folders (FR-03)
   - Grafik historis ukuran folder (FR-04)
@@ -68,10 +74,15 @@ Lihat `config.yaml` untuk semua opsi yang tersedia:
 | Parameter | Default | Keterangan |
 |-----------|---------|------------|
 | `drives` | `["D:\\"]` | Drive yang dipantau |
-| `max_depth` | `5` | Kedalaman rekursi maksimum |
-| `schedule` | `"0 2 * * *"` | Jadwal scan (cron format) |
+| `max_depth` | `5` | Folder/subfolder yang ditampilkan sampai kedalaman ini; semua isi yang lebih dalam tetap dihitung ke ukuran ancestor |
+| `schedule` | `"0 2 * * *"` | Jadwal scan (cron format); jalankan minimal harian agar analisis harian tersedia |
 | `retention.mode` | `"aggregate"` | Mode retensi: `aggregate` atau `delete` |
-| `retention.retain_raw_days` | `30` | Berapa hari data mentah disimpan |
+| `retention.retain_raw_days` | `90` | Data mentah disimpan; minimal 31 hari agar baseline bulanan tersedia |
+| `accuracy.vss_mode` | `"required"` | Wajib VSS point-in-time; scan gagal eksplisit jika VSS tidak tersedia |
+| `accuracy.collect_allocated_size` | `true` | Hitung juga Windows Properties “Size on disk” memakai API Windows |
+| `resources.scan_timeout` | `"2h"` | Batas waktu scan satu volume |
+| `resources.command_timeout` | `"2m"` | Batas waktu operasi create/delete VSS |
+| `resources.single_scan` | `true` | Cegah batch scan terjadwal berjalan bersamaan |
 | `web_server.port` | `8787` | Port web dashboard |
 | `web_server.bind_address` | `"127.0.0.1"` | Hanya localhost (tidak bisa diakses dari LAN) |
 | `database_path` | `C:\ProgramData\...` | Lokasi file SQLite |

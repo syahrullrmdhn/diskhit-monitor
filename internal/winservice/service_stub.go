@@ -5,11 +5,14 @@
 // tanpa harus di lingkungan Windows.
 package winservice
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 const ServiceName = "DiskHistMonitor"
 
-func RunAsService(runFn func()) error {
+func RunAsService(runFn func(context.Context)) error {
 	return fmt.Errorf("RunAsService hanya tersedia di Windows")
 }
 

@@ -5,6 +5,7 @@
 package winservice
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -17,46 +18,55 @@ const ServiceName = "DiskHistMonitor"
 
 // serviceHandler mengimplementasikan svc.Handler untuk Windows Service.
 type serviceHandler struct {
-	stopCh chan struct{}
-	runFn  func()
+	cancel context.CancelFunc
+	done   chan struct{}
+	runFn  func(context.Context)
 }
 
 func (h *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (ssec bool, errno uint32) {
 	changes <- svc.Status{State: svc.StartPending}
-	go h.runFn()
+	runCtx, cancel := context.WithCancel(context.Background())
+	h.cancel = cancel
+	h.done = make(chan struct{})
+	go func() {
+		defer close(h.done)
+		h.runFn(runCtx)
+	}()
 	changes <- svc.Status{
 		Accepts: svc.AcceptStop | svc.AcceptShutdown,
 		State:   svc.Running,
 	}
 
-	for {
+	stopRequested := false
+	for !stopRequested {
 		select {
 		case req := <-r:
 			switch req.Cmd {
 			case svc.Stop, svc.Shutdown:
-				changes <- svc.Status{State: svc.StopPending}
-				close(h.stopCh)
-				time.Sleep(2 * time.Second)
-				changes <- svc.Status{State: svc.Stopped}
-				return false, 0
+				stopRequested = true
 			case svc.Pause:
 				changes <- svc.Status{State: svc.Paused, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 			case svc.Continue:
 				changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 			}
-		case <-h.stopCh:
-			return false, 0
 		}
 	}
+
+	// Batalkan scan aktif dan TUNGGU sampai cleanup VSS selesai, dengan batas
+	// waktu. Ini mencegah snapshot VSS ditinggalkan saat service di-stop.
+	changes <- svc.Status{State: svc.StopPending}
+	cancel()
+	select {
+	case <-h.done:
+	case <-time.After(2 * time.Minute):
+	}
+	changes <- svc.Status{State: svc.Stopped}
+	return false, 0
 }
 
 // RunAsService dipanggil dari main.go saat SCM memulai service.
-func RunAsService(runFn func()) error {
-	stopCh := make(chan struct{})
-	handler := &serviceHandler{
-		stopCh: stopCh,
-		runFn:  runFn,
-	}
+func RunAsService(runFn func(context.Context)) error {
+	handler := &serviceHandler{runFn: runFn}
 	return svc.Run(ServiceName, handler)
 }
 
