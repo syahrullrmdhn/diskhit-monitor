@@ -37,13 +37,17 @@ func (h *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 		State:   svc.Running,
 	}
 
-	stopRequested := false
-	for !stopRequested {
+	for {
 		select {
-		case req := <-r:
+		case req, ok := <-r:
+			if !ok {
+				cancel()
+				<-h.done
+				return false, 0
+			}
 			switch req.Cmd {
 			case svc.Stop, svc.Shutdown:
-				stopRequested = true
+				goto stopping
 			case svc.Pause:
 				changes <- svc.Status{State: svc.Paused, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 			case svc.Continue:
@@ -52,6 +56,7 @@ func (h *serviceHandler) Execute(args []string, r <-chan svc.ChangeRequest, chan
 		}
 	}
 
+stopping:
 	// Batalkan scan aktif dan TUNGGU sampai cleanup VSS selesai, dengan batas
 	// waktu. Ini mencegah snapshot VSS ditinggalkan saat service di-stop.
 	changes <- svc.Status{State: svc.StopPending}

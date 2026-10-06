@@ -43,7 +43,9 @@ const configPath = "config.yaml"
 
 func executableConfigPath(name string) string {
 	exe, err := os.Executable()
-	if err != nil { return name }
+	if err != nil {
+		return name
+	}
 	return config.ResolveConfigPath(name, exe)
 }
 
@@ -135,6 +137,16 @@ func runCore(parent context.Context) {
 		log.Fatalf("[FATAL] gagal membuka database: %v", err)
 	}
 	defer store.Close()
+	var reportWorker *outboxWorker
+	if cfg.Ndelik.Enabled {
+		apiKey, secretErr := resolveSecret(cfg.Ndelik.APIKeyRef)
+		if secretErr != nil {
+			log.Printf("[ERROR] report Ndelik dinonaktifkan: gagal membaca API key: %v", secretErr)
+		} else {
+			reportWorker = newReportWorker(store.DB(), report.NewClient(cfg.Ndelik.Server, apiKey), 5*time.Second, 8)
+			go reportWorker.Run(parent)
+		}
+	}
 
 	status := webserver.NewStatusTracker()
 	srv := webserver.New(cfg.WebServer.BindAddress, cfg.WebServer.Port, status, store.DB())
@@ -154,6 +166,7 @@ func runCore(parent context.Context) {
 		ScanTimeout:      cfg.Resources.ScanTimeout,
 		CommandTimeout:   cfg.Resources.CommandTimeout,
 	})
+	scn.SetAgentID(cfg.Ndelik.AgentID)
 	ret := retention.New(store.DB(), cfg.Retention.Mode, cfg.Retention.RetainRawDays)
 	var scanBatchRunning atomic.Bool
 
@@ -244,6 +257,9 @@ func runCore(parent context.Context) {
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("[WARN] web server tidak shutdown dengan bersih dalam 10s: %v", err)
+	}
+	if reportWorker != nil {
+		reportWorker.Stop()
 	}
 	log.Println("[INFO] shutdown selesai.")
 }
