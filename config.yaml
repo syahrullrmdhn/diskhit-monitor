@@ -1,6 +1,8 @@
 # config.yaml — DiskHist Monitor Configuration
 # Lihat PRD/SRS Bagian 2.5 untuk penjelasan lengkap setiap field.
 
+config_version: 1
+
 drives:
   - "D:\\"
   # - "E:\\"   # uncomment untuk memantau drive tambahan
@@ -30,3 +32,11 @@ web_server:
 
 database_path: "C:\\ProgramData\\DiskHistMonitor\\diskhist.db"
 log_path: "C:\\ProgramData\\DiskHistMonitor\\agent.log"
+
+ndelik:
+  server: "https://ndelik.example.test"
+  agent_id: "replace-with-agent-id"
+  api_key_ref: "env://NDLIK_API_KEY"
+  enrollment_token_ref: "file://enrollment.token"
+  data_dir: "data"
+  enabled: false

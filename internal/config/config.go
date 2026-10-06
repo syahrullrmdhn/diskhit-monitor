@@ -3,7 +3,9 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -12,6 +14,7 @@ import (
 // Config merepresentasikan seluruh isi config.yaml.
 // Field ini harus selaras dengan PRD/SRS Bagian 2.5.
 type Config struct {
+	ConfigVersion int       `yaml:"config_version"`
 	Drives    []string  `yaml:"drives"`
 	MaxDepth  int       `yaml:"max_depth"`
 	Schedule  string    `yaml:"schedule"`
@@ -21,6 +24,27 @@ type Config struct {
 	Resources Resources `yaml:"resources"`
 	DBPath    string    `yaml:"database_path"`
 	LogPath   string    `yaml:"log_path"`
+	Ndelik    Ndelik    `yaml:"ndelik"`
+}
+
+type SecretRef struct { Scheme string; Value string }
+func (r *SecretRef) UnmarshalYAML(node *yaml.Node) error {
+	var value string
+	if err := node.Decode(&value); err != nil { return fmt.Errorf("secret reference must be a string: %w", err) }
+	parts := strings.SplitN(value, "://", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || !regexp.MustCompile(`^[a-z][a-z0-9+.-]*$`).MatchString(parts[0]) { return fmt.Errorf("invalid secret reference %q; use scheme://name", value) }
+	if parts[0] != "env" && parts[0] != "file" { return fmt.Errorf("unsupported secret reference scheme %q", parts[0]) }
+	r.Scheme, r.Value = parts[0], parts[1]
+	return nil
+}
+func (r SecretRef) String() string { if r.Scheme == "" { return "" }; return r.Scheme + "://" + r.Value }
+type Ndelik struct {
+	Server string `yaml:"server"`
+	AgentID string `yaml:"agent_id"`
+	APIKeyRef SecretRef `yaml:"api_key_ref"`
+	EnrollmentTokenRef SecretRef `yaml:"enrollment_token_ref"`
+	DataDir string `yaml:"data_dir"`
+	Enabled bool `yaml:"enabled"`
 }
 
 type Accuracy struct {
@@ -49,6 +73,7 @@ type Resources struct {
 	ScanTimeout    time.Duration `yaml:"-"`
 	CommandTimeout time.Duration `yaml:"-"`
 	SingleScan     bool          `yaml:"single_scan"`
+	singleScanConfigured bool
 }
 
 func (r *Resources) UnmarshalYAML(node *yaml.Node) error {
@@ -75,6 +100,7 @@ func (r *Resources) UnmarshalYAML(node *yaml.Node) error {
 	}
 	if raw.SingleScan != nil {
 		r.SingleScan = *raw.SingleScan
+		r.singleScanConfigured = true
 	}
 	return nil
 }
@@ -99,11 +125,17 @@ func Load(path string) (*Config, error) {
 	}
 
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	dec := yaml.NewDecoder(strings.NewReader(string(data)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("config.yaml di %q tidak valid (syntax YAML error): %w", path, err)
 	}
 
 	cfg.applyDefaults()
+	baseDir := filepath.Dir(path)
+	cfg.DBPath = resolvePath(baseDir, cfg.DBPath)
+	cfg.LogPath = resolvePath(baseDir, cfg.LogPath)
+	cfg.Ndelik.DataDir = resolvePath(baseDir, cfg.Ndelik.DataDir)
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("config.yaml di %q lolos parsing tapi nilainya tidak valid: %w", path, err)
 	}
@@ -114,6 +146,12 @@ func Load(path string) (*Config, error) {
 // yang tidak ada di file config, agar perilaku aman (VSS required, resource
 // bounds) berlaku tanpa perlu user mengubah config lama.
 func (c *Config) applyDefaults() {
+	if c.ConfigVersion == 0 { c.ConfigVersion = 1 }
+	if c.Retention.RetainRawDays == 30 {
+		// v1.0.x shipped with 30 days. Preserve upgrade compatibility while
+		// retaining enough history for a true monthly baseline.
+		c.Retention.RetainRawDays = 31
+	}
 	if c.Accuracy.VSSMode == "" {
 		c.Accuracy.VSSMode = "required"
 	}
@@ -126,7 +164,17 @@ func (c *Config) applyDefaults() {
 	if c.Resources.CommandTimeout == 0 {
 		c.Resources.CommandTimeout = 2 * time.Minute
 	}
-	c.Resources.SingleScan = true
+	if !c.Resources.singleScanConfigured { c.Resources.SingleScan = true }
+}
+
+func resolvePath(base, value string) string {
+	if value == "" || filepath.IsAbs(value) { return value }
+	return filepath.Join(base, value)
+}
+
+func ResolveConfigPath(name, executable string) string {
+	if filepath.IsAbs(name) { return name }
+	return filepath.Join(filepath.Dir(executable), name)
 }
 
 var driveRootPattern = regexp.MustCompile(`^[A-Za-z]:\\$`)
@@ -179,6 +227,15 @@ func (c *Config) validate() error {
 	}
 	if c.Resources.CommandTimeout > c.Resources.ScanTimeout {
 		return fmt.Errorf("field 'resources.command_timeout' (%s) tidak boleh melebihi 'resources.scan_timeout' (%s)", c.Resources.CommandTimeout, c.Resources.ScanTimeout)
+	}
+	if c.ConfigVersion != 1 {
+		return fmt.Errorf("field 'config_version' bernilai %d, hanya versi 1 yang didukung", c.ConfigVersion)
+	}
+	if c.Ndelik.Enabled {
+		if c.Ndelik.Server == "" { return fmt.Errorf("field 'ndelik.server' wajib diisi saat ndelik.enabled=true") }
+		if c.Ndelik.AgentID == "" { return fmt.Errorf("field 'ndelik.agent_id' wajib diisi saat ndelik.enabled=true") }
+		if c.Ndelik.APIKeyRef.Scheme == "" { return fmt.Errorf("field 'ndelik.api_key_ref' wajib diisi saat ndelik.enabled=true") }
+		if c.Ndelik.EnrollmentTokenRef.Scheme == "" { return fmt.Errorf("field 'ndelik.enrollment_token_ref' wajib diisi saat ndelik.enabled=true") }
 	}
 	return nil
 }

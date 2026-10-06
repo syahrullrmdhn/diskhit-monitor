@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"diskhist-monitor/internal/config"
+	"diskhist-monitor/internal/report"
 	"diskhist-monitor/internal/retention"
 	"diskhist-monitor/internal/scanner"
 	"diskhist-monitor/internal/storage"
@@ -38,6 +40,12 @@ import (
 )
 
 const configPath = "config.yaml"
+
+func executableConfigPath(name string) string {
+	exe, err := os.Executable()
+	if err != nil { return name }
+	return config.ResolveConfigPath(name, exe)
+}
 
 func main() {
 	// Tanpa argumen: cek apakah dijalankan oleh Windows SCM
@@ -53,6 +61,8 @@ func main() {
 	switch os.Args[1] {
 	case "run":
 		runForeground()
+	case "report":
+		runReport(os.Args[2:])
 	case "install":
 		if err := winservice.InstallService(); err != nil {
 			log.Fatalf("[FATAL] gagal install service: %v", err)
@@ -75,8 +85,12 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  diskhist.exe run         Jalankan di foreground (untuk testing)")
+	fmt.Println("  diskhist.exe report      Scan lalu kirim hasilnya ke server Ndelik")
 	fmt.Println("  diskhist.exe install     Install sebagai Windows Service")
 	fmt.Println("  diskhist.exe uninstall   Uninstall Windows Service")
+	fmt.Println()
+	fmt.Println("Report ke Ndelik:")
+	fmt.Println("  diskhist.exe report --server URL --api-key KEY [--config config.yaml] [--drive D:\\]")
 	fmt.Println()
 	fmt.Println("Konfigurasi: config.yaml di direktori yang sama dengan executable")
 }
@@ -100,7 +114,7 @@ func runForeground() {
 // runCore menjalankan seluruh logic inti: config → DB → scanner → webserver → cron.
 // Parent context berasal dari SCM pada service mode dan dibatalkan saat Stop.
 func runCore(parent context.Context) {
-	cfg, err := config.Load(configPath)
+	cfg, err := config.Load(executableConfigPath(configPath))
 	if err != nil {
 		log.Fatalf("[FATAL] gagal load config: %v", err)
 	}
@@ -251,4 +265,90 @@ func setupLogging(logPath string) {
 	multiWriter := io.MultiWriter(os.Stdout, f)
 	log.SetOutput(multiWriter)
 	log.Printf("[INFO] log ditulis ke %s", logPath)
+}
+
+// runReport menjalankan scan sekali persis seperti mode run, lalu memuat hasil
+// terbaru dari SQLite dan mengirimnya ke server Ndelik (POST /agent/v1/storage).
+// Keluar dengan kode non-nol jika ada scan atau push yang gagal.
+func runReport(args []string) {
+	fs := flag.NewFlagSet("report", flag.ExitOnError)
+	server := fs.String("server", "", "URL server Ndelik, contoh https://ndelik.srbyte.id")
+	apiKey := fs.String("api-key", "", "API key agent untuk autentikasi ke server Ndelik")
+	cfgPath := fs.String("config", configPath, "Path file config.yaml")
+	driveFlag := fs.String("drive", "", "Batasi scan ke satu drive (misal D:\\); default semua drive di config")
+	fs.Usage = func() {
+		fmt.Println("Usage: diskhist.exe report --server URL --api-key KEY [--config config.yaml] [--drive D:\\]")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+
+	if *server == "" || *apiKey == "" {
+		fmt.Fprintln(os.Stderr, "flag --server dan --api-key wajib diisi")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		log.Fatalf("[FATAL] gagal load config: %v", err)
+	}
+	setupLogging(cfg.LogPath)
+	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0755); err != nil {
+		log.Fatalf("[FATAL] gagal membuat direktori database %q: %v", filepath.Dir(cfg.DBPath), err)
+	}
+
+	store, err := storage.Open(cfg.DBPath)
+	if err != nil {
+		log.Fatalf("[FATAL] gagal membuka database: %v", err)
+	}
+	defer store.Close()
+
+	drives := cfg.Drives
+	if *driveFlag != "" {
+		drives = []string{*driveFlag}
+	}
+
+	scn := scanner.NewWithOptions(store.DB(), cfg.MaxDepth, scanner.Options{
+		UseVSS:           cfg.Accuracy.VSSMode == "required",
+		CollectAllocated: cfg.Accuracy.CollectAllocatedSize,
+		ScanTimeout:      cfg.Resources.ScanTimeout,
+		CommandTimeout:   cfg.Resources.CommandTimeout,
+	})
+	client := report.NewClient(*server, *apiKey)
+	ctx := context.Background()
+
+	failed := false
+	for _, drive := range drives {
+		func(drive string) {
+			defer func() {
+				if rec := recover(); rec != nil {
+					log.Printf("[ERROR] panic ditangkap saat report drive %q: %v", drive, rec)
+					failed = true
+				}
+			}()
+			result := scn.ScanDriveContext(ctx, drive)
+			if result.Status == "failed" {
+				log.Printf("[ERROR] scan drive %q gagal; report dilewati", drive)
+				failed = true
+				return
+			}
+			payload, err := report.LoadLatest(ctx, store.DB(), drive)
+			if err != nil {
+				log.Printf("[ERROR] drive %q: %v", drive, err)
+				failed = true
+				return
+			}
+			ack, err := client.Push(ctx, payload)
+			if err != nil {
+				log.Printf("[ERROR] push report drive %q gagal: %v", drive, err)
+				failed = true
+				return
+			}
+			log.Printf("[INFO] report drive %q terkirim: status=%s consistency=%s folders=%d accepted=%d scan_id=%s",
+				drive, payload.Scan.Status, payload.Scan.Consistency, len(payload.Folders), ack.Accepted, ack.ScanID)
+		}(drive)
+	}
+	if failed {
+		os.Exit(1)
+	}
 }
