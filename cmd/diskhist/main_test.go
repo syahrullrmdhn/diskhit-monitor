@@ -26,8 +26,8 @@ func TestResolveSecretReadsEnvironmentAndFile(t *testing.T) {
 	if got, err := resolveSecret(config.SecretRef{Scheme: "env", Value: "DISKHIST_TEST_SECRET"}); err != nil || got != "from-env" {
 		t.Fatalf("env secret = %q, %v", got, err)
 	}
-	if got, err := resolveSecret(config.SecretRef{Scheme: "file", Value: path}); err != nil || got != "from-file" {
-		t.Fatalf("file secret = %q, %v", got, err)
+	if got, err := resolveSecret(config.SecretRef{Scheme: "file", Value: filepath.Base(path)}, filepath.Dir(path)); err != nil || got != "from-file" {
+		t.Fatalf("relative file secret = %q, %v", got, err)
 	}
 }
 

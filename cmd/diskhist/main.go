@@ -139,13 +139,12 @@ func runCore(parent context.Context) {
 	defer store.Close()
 	var reportWorker *outboxWorker
 	if cfg.Ndelik.Enabled {
-		apiKey, secretErr := resolveSecret(cfg.Ndelik.APIKeyRef)
+		apiKey, secretErr := resolveSecret(cfg.Ndelik.APIKeyRef, filepath.Dir(executableConfigPath(configPath)))
 		if secretErr != nil {
-			log.Printf("[ERROR] report Ndelik dinonaktifkan: gagal membaca API key: %v", secretErr)
-		} else {
-			reportWorker = newReportWorker(store.DB(), report.NewClient(cfg.Ndelik.Server, apiKey), 5*time.Second, 8)
-			go reportWorker.Run(parent)
+			log.Fatalf("[FATAL] report Ndelik enabled but API key unavailable: %v", secretErr)
 		}
+		reportWorker = newReportWorker(store.DB(), report.NewClient(cfg.Ndelik.Server, apiKey), 5*time.Second, 8)
+		go reportWorker.Run(parent)
 	}
 
 	status := webserver.NewStatusTracker()

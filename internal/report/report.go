@@ -209,7 +209,7 @@ func LoadScanByID(ctx context.Context, db *sql.DB, scanID int64) (Payload, error
 		SELECT sh.drive_letter, sh.scan_date, sh.finished_at, sh.total_size_bytes, sh.total_allocated_bytes, sh.status, sh.skipped_count, sh.consistency,
 		       COALESCE(so.idempotency_key, '')
 		FROM scan_history sh LEFT JOIN scan_outbox so ON so.scan_id = sh.id
-		WHERE sh.id = ? AND sh.status IN ('success','partial')`, scanID).
+		WHERE sh.id = ? AND sh.status IN ('success','partial','failed')`, scanID).
 		Scan(&drive, &scanDate, &finishedAt, &totalSize, &totalAlloc, &status, &skipped, &consistency, &idempotency)
 	if err == sql.ErrNoRows {
 		return Payload{}, fmt.Errorf("belum ada scan selesai id %d di database DiskHist", scanID)
@@ -234,7 +234,7 @@ func LoadScanByID(ctx context.Context, db *sql.DB, scanID int64) (Payload, error
 			Status:              mapStatus(status),
 			Consistency:         mapConsistency(status),
 			VSSMode:             mapVSSMode(consistency),
-			Error:               "",
+			Error:               scanError(status),
 			TotalBytes:          totalSize,
 			TotalAllocatedBytes: &alloc,
 			FolderCount:         len(folders),
@@ -283,6 +283,13 @@ func loadFolders(ctx context.Context, db *sql.DB, scanID int64) ([]FolderJSON, e
 	return folders, nil
 }
 
+func scanError(status string) string {
+	if status == "failed" {
+		return "scan failed"
+	}
+	return ""
+}
+
 // mapStatus memetakan status DiskHist (success/partial/failed) ke status Ndelik
 // (ok/partial/failed).
 func mapStatus(status string) string {
@@ -291,6 +298,8 @@ func mapStatus(status string) string {
 		return "ok"
 	case "partial":
 		return "partial"
+	case "failed":
+		return "failed"
 	default:
 		return "failed"
 	}

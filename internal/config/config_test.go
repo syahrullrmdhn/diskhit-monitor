@@ -35,7 +35,9 @@ ndelik:
   enabled: true
 `)
 	cfg, err := Load(path)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := filepath.Dir(path)
 	if cfg.DBPath != filepath.Join(dir, "data", "diskhist.db") || cfg.LogPath != filepath.Join(dir, "logs", "agent.log") {
 		t.Fatalf("paths not resolved relative to config: db=%q log=%q", cfg.DBPath, cfg.LogPath)
@@ -43,7 +45,25 @@ ndelik:
 	if cfg.Ndelik.DataDir != filepath.Join(dir, "state") || cfg.Ndelik.APIKeyRef.Scheme != "env" || cfg.Ndelik.APIKeyRef.Value != "DISKHIST_API_KEY" {
 		t.Fatalf("unexpected ndelik config: %+v", cfg.Ndelik)
 	}
-	if cfg.Ndelik.EnrollmentTokenRef.String() != "file://secrets/enrollment.token" { t.Fatal("secret reference was resolved unexpectedly") }
+	if cfg.Ndelik.EnrollmentTokenRef.String() != "file://secrets/enrollment.token" {
+		t.Fatal("secret reference was resolved unexpectedly")
+	}
+}
+
+func TestLoadAllowsEnabledNdelikWithoutUnusedEnrollmentToken(t *testing.T) {
+	path := writeConfig(t, `config_version: 1
+drives: ["D:\\"]
+max_depth: 5
+schedule: "0 2 * * *"
+retention: {mode: aggregate, retain_raw_days: 90}
+web_server: {port: 8787, bind_address: 127.0.0.1}
+database_path: test.db
+log_path: test.log
+ndelik: {enabled: true, server: https://example.test, agent_id: a, api_key_ref: env://KEY}
+`)
+	if _, err := Load(path); err != nil {
+		t.Fatalf("enabled config should not require unused enrollment token: %v", err)
+	}
 }
 
 func TestLoadPreservesExplicitFalseAndRejectsUnknownFields(t *testing.T) {
@@ -58,10 +78,16 @@ log_path: test.log
 resources: {single_scan: false}
 `)
 	cfg, err := Load(path)
-	if err != nil { t.Fatal(err) }
-	if cfg.Resources.SingleScan { t.Fatal("explicit single_scan=false was overwritten") }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Resources.SingleScan {
+		t.Fatal("explicit single_scan=false was overwritten")
+	}
 	bad := writeConfig(t, "drives: [\"D:\\\\\"]\nmax_depth: 1\nunknown: true\n")
-	if _, err := Load(bad); err == nil || !strings.Contains(err.Error(), "unknown") { t.Fatalf("unknown field was accepted: %v", err) }
+	if _, err := Load(bad); err == nil || !strings.Contains(err.Error(), "unknown") {
+		t.Fatalf("unknown field was accepted: %v", err)
+	}
 }
 
 func TestLoadRejectsMalformedSecretReference(t *testing.T) {
@@ -75,14 +101,18 @@ database_path: test.db
 log_path: test.log
 ndelik: {enabled: true, server: https://example.test, agent_id: a, api_key_ref: plaintext-secret}
 `)
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "secret reference") { t.Fatalf("malformed secret ref accepted: %v", err) }
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "secret reference") {
+		t.Fatalf("malformed secret ref accepted: %v", err)
+	}
 }
 
 func TestResolveConfigPathUsesExecutableDirectory(t *testing.T) {
 	exe := filepath.Join(t.TempDir(), "bin", "diskhist.exe")
 	got := ResolveConfigPath("config.yaml", exe)
 	want := filepath.Join(filepath.Dir(exe), "config.yaml")
-	if got != want { t.Fatalf("got %q want %q", got, want) }
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
 }
 
 func TestLoadAppliesSafeAccuracyDefaults(t *testing.T) {

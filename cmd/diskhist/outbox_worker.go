@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +17,7 @@ import (
 	"diskhist-monitor/internal/storage"
 )
 
-func resolveSecret(ref config.SecretRef) (string, error) {
+func resolveSecret(ref config.SecretRef, baseDir ...string) (string, error) {
 	switch ref.Scheme {
 	case "env":
 		value := os.Getenv(ref.Value)
@@ -25,13 +26,17 @@ func resolveSecret(ref config.SecretRef) (string, error) {
 		}
 		return value, nil
 	case "file":
-		value, err := os.ReadFile(ref.Value)
+		path := ref.Value
+		if len(baseDir) > 0 && !filepath.IsAbs(path) {
+			path = filepath.Join(baseDir[0], path)
+		}
+		value, err := os.ReadFile(path)
 		if err != nil {
-			return "", fmt.Errorf("read secret file %q: %w", ref.Value, err)
+			return "", fmt.Errorf("read secret file %q: %w", path, err)
 		}
 		secret := strings.TrimSpace(string(value))
 		if secret == "" {
-			return "", fmt.Errorf("secret file %q is empty", ref.Value)
+			return "", fmt.Errorf("secret file %q is empty", path)
 		}
 		return secret, nil
 	default:
@@ -46,6 +51,7 @@ type outboxWorker struct {
 	maxAttempts int
 	stop        chan struct{}
 	once        sync.Once
+	done        chan struct{}
 }
 
 func newReportWorker(db *sql.DB, client *report.Client, poll time.Duration, maxAttempts int) *outboxWorker {
@@ -55,10 +61,11 @@ func newReportWorker(db *sql.DB, client *report.Client, poll time.Duration, maxA
 	if maxAttempts < 1 {
 		maxAttempts = 1
 	}
-	return &outboxWorker{db: db, client: client, poll: poll, maxAttempts: maxAttempts, stop: make(chan struct{})}
+	return &outboxWorker{db: db, client: client, poll: poll, maxAttempts: maxAttempts, stop: make(chan struct{}), done: make(chan struct{})}
 }
-func (w *outboxWorker) Stop() { w.once.Do(func() { close(w.stop) }) }
+func (w *outboxWorker) Stop() { w.once.Do(func() { close(w.stop) }); <-w.done }
 func (w *outboxWorker) Run(ctx context.Context) {
+	defer close(w.done)
 	for {
 		err := w.processOne(ctx)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) && !errors.Is(err, context.Canceled) {
@@ -79,7 +86,7 @@ func (w *outboxWorker) processOne(ctx context.Context) error {
 		return err
 	}
 	if item.Attempts >= w.maxAttempts {
-		return storage.MarkOutboxPending(w.db, item.ID, "dead-letter: retry limit reached", time.Now().UTC())
+		return storage.MarkOutboxDeadLetter(w.db, item.ID, "dead-letter: retry limit reached", time.Now().UTC())
 	}
 	payload, err := report.LoadScanByID(ctx, w.db, item.ScanID)
 	if err == nil {
@@ -89,11 +96,14 @@ func (w *outboxWorker) processOne(ctx context.Context) error {
 	if err == nil {
 		return storage.MarkOutboxSent(w.db, item.ID, time.Now().UTC())
 	}
-	if markErr := storage.MarkOutboxPending(w.db, item.ID, boundedReportError(err, item.Attempts >= w.maxAttempts), time.Now().UTC()); markErr != nil {
-		return fmt.Errorf("report item %d failed: %v; reset pending: %w", item.ID, err, markErr)
-	}
 	if item.Attempts >= w.maxAttempts {
-		log.Printf("[ERROR] report outbox item %d dead-lettered after %d attempts: %v", item.ID, item.Attempts, err)
+		if markErr := storage.MarkOutboxDeadLetter(w.db, item.ID, boundedReportError(err, true), time.Now().UTC()); markErr != nil {
+			return fmt.Errorf("report item %d failed: %v; dead-letter: %w", item.ID, err, markErr)
+		}
+		return err
+	}
+	if markErr := storage.MarkOutboxPending(w.db, item.ID, boundedReportError(err, false), time.Now().UTC()); markErr != nil {
+		return fmt.Errorf("report item %d failed: %v; reset pending: %w", item.ID, err, markErr)
 	}
 	return err
 }

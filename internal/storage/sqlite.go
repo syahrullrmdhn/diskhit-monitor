@@ -111,11 +111,12 @@ func (s *Store) migrate() error {
 		drive_letter TEXT NOT NULL,
 		scan_id INTEGER NOT NULL,
 		idempotency_key TEXT NOT NULL UNIQUE,
-		status TEXT NOT NULL CHECK (status IN ('pending','sending','sent')),
+		status TEXT NOT NULL CHECK (status IN ('pending','sending','sent','dead_letter')),
 		attempts INTEGER NOT NULL DEFAULT 0,
 		last_error TEXT NOT NULL DEFAULT '',
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME,
+		lease_until DATETIME,
 		sent_at DATETIME,
 		FOREIGN KEY(scan_id) REFERENCES scan_history(id) ON DELETE CASCADE
 	);
@@ -130,6 +131,7 @@ func (s *Store) migrate() error {
 		{"folder_metrics", "allocated_bytes", "BIGINT NOT NULL DEFAULT 0"},
 		{"folder_snapshots", "allocated_bytes", "BIGINT NOT NULL DEFAULT 0"},
 		{"scan_history", "finished_at", "DATETIME"},
+		{"scan_outbox", "lease_until", "DATETIME"},
 	}
 	for _, addition := range additions {
 		exists, err := columnExists(s.db, addition.table, addition.column)

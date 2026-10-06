@@ -15,36 +15,52 @@ import (
 // Field ini harus selaras dengan PRD/SRS Bagian 2.5.
 type Config struct {
 	ConfigVersion int       `yaml:"config_version"`
-	Drives    []string  `yaml:"drives"`
-	MaxDepth  int       `yaml:"max_depth"`
-	Schedule  string    `yaml:"schedule"`
-	Retention Retention `yaml:"retention"`
-	WebServer WebServer `yaml:"web_server"`
-	Accuracy  Accuracy  `yaml:"accuracy"`
-	Resources Resources `yaml:"resources"`
-	DBPath    string    `yaml:"database_path"`
-	LogPath   string    `yaml:"log_path"`
-	Ndelik    Ndelik    `yaml:"ndelik"`
+	Drives        []string  `yaml:"drives"`
+	MaxDepth      int       `yaml:"max_depth"`
+	Schedule      string    `yaml:"schedule"`
+	Retention     Retention `yaml:"retention"`
+	WebServer     WebServer `yaml:"web_server"`
+	Accuracy      Accuracy  `yaml:"accuracy"`
+	Resources     Resources `yaml:"resources"`
+	DBPath        string    `yaml:"database_path"`
+	LogPath       string    `yaml:"log_path"`
+	Ndelik        Ndelik    `yaml:"ndelik"`
 }
 
-type SecretRef struct { Scheme string; Value string }
+type SecretRef struct {
+	Scheme string
+	Value  string
+}
+
 func (r *SecretRef) UnmarshalYAML(node *yaml.Node) error {
 	var value string
-	if err := node.Decode(&value); err != nil { return fmt.Errorf("secret reference must be a string: %w", err) }
+	if err := node.Decode(&value); err != nil {
+		return fmt.Errorf("secret reference must be a string: %w", err)
+	}
 	parts := strings.SplitN(value, "://", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || !regexp.MustCompile(`^[a-z][a-z0-9+.-]*$`).MatchString(parts[0]) { return fmt.Errorf("invalid secret reference %q; use scheme://name", value) }
-	if parts[0] != "env" && parts[0] != "file" { return fmt.Errorf("unsupported secret reference scheme %q", parts[0]) }
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || !regexp.MustCompile(`^[a-z][a-z0-9+.-]*$`).MatchString(parts[0]) {
+		return fmt.Errorf("invalid secret reference %q; use scheme://name", value)
+	}
+	if parts[0] != "env" && parts[0] != "file" {
+		return fmt.Errorf("unsupported secret reference scheme %q", parts[0])
+	}
 	r.Scheme, r.Value = parts[0], parts[1]
 	return nil
 }
-func (r SecretRef) String() string { if r.Scheme == "" { return "" }; return r.Scheme + "://" + r.Value }
+func (r SecretRef) String() string {
+	if r.Scheme == "" {
+		return ""
+	}
+	return r.Scheme + "://" + r.Value
+}
+
 type Ndelik struct {
-	Server string `yaml:"server"`
-	AgentID string `yaml:"agent_id"`
-	APIKeyRef SecretRef `yaml:"api_key_ref"`
+	Server             string    `yaml:"server"`
+	AgentID            string    `yaml:"agent_id"`
+	APIKeyRef          SecretRef `yaml:"api_key_ref"`
 	EnrollmentTokenRef SecretRef `yaml:"enrollment_token_ref"`
-	DataDir string `yaml:"data_dir"`
-	Enabled bool `yaml:"enabled"`
+	DataDir            string    `yaml:"data_dir"`
+	Enabled            bool      `yaml:"enabled"`
 }
 
 type Accuracy struct {
@@ -70,9 +86,9 @@ func (a *Accuracy) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type Resources struct {
-	ScanTimeout    time.Duration `yaml:"-"`
-	CommandTimeout time.Duration `yaml:"-"`
-	SingleScan     bool          `yaml:"single_scan"`
+	ScanTimeout          time.Duration `yaml:"-"`
+	CommandTimeout       time.Duration `yaml:"-"`
+	SingleScan           bool          `yaml:"single_scan"`
 	singleScanConfigured bool
 }
 
@@ -146,7 +162,9 @@ func Load(path string) (*Config, error) {
 // yang tidak ada di file config, agar perilaku aman (VSS required, resource
 // bounds) berlaku tanpa perlu user mengubah config lama.
 func (c *Config) applyDefaults() {
-	if c.ConfigVersion == 0 { c.ConfigVersion = 1 }
+	if c.ConfigVersion == 0 {
+		c.ConfigVersion = 1
+	}
 	if c.Retention.RetainRawDays == 30 {
 		// v1.0.x shipped with 30 days. Preserve upgrade compatibility while
 		// retaining enough history for a true monthly baseline.
@@ -164,16 +182,22 @@ func (c *Config) applyDefaults() {
 	if c.Resources.CommandTimeout == 0 {
 		c.Resources.CommandTimeout = 2 * time.Minute
 	}
-	if !c.Resources.singleScanConfigured { c.Resources.SingleScan = true }
+	if !c.Resources.singleScanConfigured {
+		c.Resources.SingleScan = true
+	}
 }
 
 func resolvePath(base, value string) string {
-	if value == "" || filepath.IsAbs(value) { return value }
+	if value == "" || filepath.IsAbs(value) {
+		return value
+	}
 	return filepath.Join(base, value)
 }
 
 func ResolveConfigPath(name, executable string) string {
-	if filepath.IsAbs(name) { return name }
+	if filepath.IsAbs(name) {
+		return name
+	}
 	return filepath.Join(filepath.Dir(executable), name)
 }
 
@@ -232,10 +256,15 @@ func (c *Config) validate() error {
 		return fmt.Errorf("field 'config_version' bernilai %d, hanya versi 1 yang didukung", c.ConfigVersion)
 	}
 	if c.Ndelik.Enabled {
-		if c.Ndelik.Server == "" { return fmt.Errorf("field 'ndelik.server' wajib diisi saat ndelik.enabled=true") }
-		if c.Ndelik.AgentID == "" { return fmt.Errorf("field 'ndelik.agent_id' wajib diisi saat ndelik.enabled=true") }
-		if c.Ndelik.APIKeyRef.Scheme == "" { return fmt.Errorf("field 'ndelik.api_key_ref' wajib diisi saat ndelik.enabled=true") }
-		if c.Ndelik.EnrollmentTokenRef.Scheme == "" { return fmt.Errorf("field 'ndelik.enrollment_token_ref' wajib diisi saat ndelik.enabled=true") }
+		if c.Ndelik.Server == "" {
+			return fmt.Errorf("field 'ndelik.server' wajib diisi saat ndelik.enabled=true")
+		}
+		if c.Ndelik.AgentID == "" {
+			return fmt.Errorf("field 'ndelik.agent_id' wajib diisi saat ndelik.enabled=true")
+		}
+		if c.Ndelik.APIKeyRef.Scheme == "" {
+			return fmt.Errorf("field 'ndelik.api_key_ref' wajib diisi saat ndelik.enabled=true")
+		}
 	}
 	return nil
 }

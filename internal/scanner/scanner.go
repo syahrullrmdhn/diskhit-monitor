@@ -391,11 +391,22 @@ func (s *Scanner) persistMetrics(drive string, sizes map[string]folderMetric, re
 	return tx.Commit()
 }
 
+// Failed scans are enqueued so the report contract can explicitly carry a failed result.
 func (s *Scanner) persistFailedScan(result Result) {
-	if _, err := s.db.Exec(`INSERT INTO scan_history
-		(scan_date, drive_letter, total_size_bytes, total_allocated_bytes, status, skipped_count, consistency)
-		VALUES (?, ?, 0, 0, 'failed', ?, 'failed')`, result.ScanDate, result.Drive, result.SkippedCount); err != nil {
+	res, err := s.db.Exec(`INSERT INTO scan_history
+		(scan_date, drive_letter, total_size_bytes, total_allocated_bytes, status, skipped_count, consistency, finished_at)
+		VALUES (?, ?, 0, 0, 'failed', ?, 'failed', ?)`, result.ScanDate, result.Drive, result.SkippedCount, result.ScanDate)
+	if err != nil {
 		log.Printf("[ERROR] gagal mencatat scan gagal untuk %q: %v", result.Drive, err)
+		return
+	}
+	scanID, err := res.LastInsertId()
+	if err != nil {
+		log.Printf("[ERROR] gagal membaca id scan gagal untuk %q: %v", result.Drive, err)
+		return
+	}
+	if err := storage.EnqueueScanOutbox(s.db, s.agentID, result.Drive, scanID); err != nil {
+		log.Printf("[ERROR] gagal enqueue scan gagal untuk %q: %v", result.Drive, err)
 	}
 }
 
