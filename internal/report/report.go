@@ -89,7 +89,7 @@ type Ack struct {
 // Push mengirim satu payload scan dan mengembalikan ack server.
 func (c *Client) Push(ctx context.Context, p Payload) (Ack, error) {
 	u, err := url.Parse(strings.TrimRight(c.Server, "/") + storagePath)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost") {
+	if err != nil || u.Scheme != "https" || u.Host == "" {
 		return Ack{}, fmt.Errorf("report server must use HTTPS")
 	}
 	if p.IdempotencyKey == "" {
@@ -166,7 +166,7 @@ func (c *Client) Push(ctx context.Context, p Payload) (Ack, error) {
 			return Ack{}, fmt.Errorf("server menolak report (%s): %s", resp.Status, strings.TrimSpace(string(respBody)))
 		}
 		var ack Ack
-		if err := json.Unmarshal(respBody, &ack); err != nil || ack.ScanID == "" || ack.Accepted < 0 {
+		if err := json.Unmarshal(respBody, &ack); err != nil || ack.ScanID == "" || ack.Accepted < 0 || ack.Rejected == nil {
 			return Ack{}, fmt.Errorf("invalid ACK response")
 		}
 		return ack, nil
@@ -197,20 +197,16 @@ func LoadScanByID(ctx context.Context, db *sql.DB, scanID int64) (Payload, error
 	var (
 		drive       string
 		scanDate    time.Time
-		finishedAt  sql.NullTime
 		totalSize   int64
 		totalAlloc  int64
 		status      string
 		skipped     int
 		consistency string
-		idempotency string
 	)
 	err := db.QueryRowContext(ctx, `
-		SELECT sh.drive_letter, sh.scan_date, sh.finished_at, sh.total_size_bytes, sh.total_allocated_bytes, sh.status, sh.skipped_count, sh.consistency,
-		       COALESCE(so.idempotency_key, '')
-		FROM scan_history sh LEFT JOIN scan_outbox so ON so.scan_id = sh.id
-		WHERE sh.id = ? AND sh.status IN ('success','partial')`, scanID).
-		Scan(&drive, &scanDate, &finishedAt, &totalSize, &totalAlloc, &status, &skipped, &consistency, &idempotency)
+		SELECT drive_letter, scan_date, finished_at, total_size_bytes, total_allocated_bytes, status, skipped_count, consistency
+		FROM scan_history WHERE id = ? AND status IN ('success','partial')`, scanID).
+		Scan(&drive, &scanDate, &finishedAt, &totalSize, &totalAlloc, &status, &skipped, &consistency)
 	if err == sql.ErrNoRows {
 		return Payload{}, fmt.Errorf("belum ada scan selesai id %d di database DiskHist", scanID)
 	}
@@ -240,9 +236,8 @@ func LoadScanByID(ctx context.Context, db *sql.DB, scanID int64) (Payload, error
 			FolderCount:         len(folders),
 			SkippedCount:        skipped,
 		},
-		Folders:        folders,
-		Version:        payloadVersion,
-		IdempotencyKey: idempotency,
+		Folders: folders,
+		Version: payloadVersion,
 	}, nil
 }
 
