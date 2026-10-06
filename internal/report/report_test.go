@@ -76,7 +76,6 @@ func TestPushSendsAuthHeaderAndBodyShape(t *testing.T) {
 		t.Fatalf("ack tidak sesuai: %+v", ack)
 	}
 
-
 	if got.method != http.MethodPost {
 		t.Errorf("method = %q, mau POST", got.method)
 	}
@@ -94,7 +93,7 @@ func TestPushSendsAuthHeaderAndBodyShape(t *testing.T) {
 	if err := json.Unmarshal(got.body, &top); err != nil {
 		t.Fatalf("body bukan JSON valid: %v (%s)", err, got.body)
 	}
-	assertKeys(t, "payload", top, "scan", "folders", "version")
+	assertKeys(t, "payload", top, "scan", "folders", "version", "idempotency_key")
 
 	var scan map[string]json.RawMessage
 	if err := json.Unmarshal(top["scan"], &scan); err != nil {

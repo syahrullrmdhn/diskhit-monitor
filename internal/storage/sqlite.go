@@ -58,6 +58,7 @@ func (s *Store) migrate() error {
 		status TEXT NOT NULL CHECK (status IN ('success','partial','failed')),
 		skipped_count INTEGER NOT NULL DEFAULT 0,
 		consistency TEXT NOT NULL DEFAULT 'live'
+		,finished_at DATETIME
 	);
 
 	CREATE TABLE IF NOT EXISTS folder_metrics (
@@ -103,6 +104,22 @@ func (s *Store) migrate() error {
 	CREATE UNIQUE INDEX IF NOT EXISTS idx_folder_snapshots_scan_path ON folder_snapshots(scan_id, folder_path);
 	CREATE INDEX IF NOT EXISTS idx_folder_snapshots_path_date ON folder_snapshots(folder_path, scan_date);
 	CREATE INDEX IF NOT EXISTS idx_folder_snapshots_date ON folder_snapshots(scan_date);
+
+	CREATE TABLE IF NOT EXISTS scan_outbox (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		agent_id TEXT NOT NULL,
+		drive_letter TEXT NOT NULL,
+		scan_id INTEGER NOT NULL,
+		idempotency_key TEXT NOT NULL UNIQUE,
+		status TEXT NOT NULL CHECK (status IN ('pending','sending','sent')),
+		attempts INTEGER NOT NULL DEFAULT 0,
+		last_error TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME,
+		sent_at DATETIME,
+		FOREIGN KEY(scan_id) REFERENCES scan_history(id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS idx_scan_outbox_pending ON scan_outbox(status, created_at);
 	`
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
@@ -112,6 +129,7 @@ func (s *Store) migrate() error {
 		{"scan_history", "consistency", "TEXT NOT NULL DEFAULT 'live'"},
 		{"folder_metrics", "allocated_bytes", "BIGINT NOT NULL DEFAULT 0"},
 		{"folder_snapshots", "allocated_bytes", "BIGINT NOT NULL DEFAULT 0"},
+		{"scan_history", "finished_at", "DATETIME"},
 	}
 	for _, addition := range additions {
 		exists, err := columnExists(s.db, addition.table, addition.column)

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"diskhist-monitor/internal/storage"
 )
 
 // Result merangkum hasil satu kali eksekusi scan, dipakai untuk
@@ -40,6 +42,7 @@ type Scanner struct {
 	options  Options
 	provider SnapshotProvider
 	running  atomic.Bool
+	agentID  string
 }
 
 func New(db *sql.DB, maxDepth int) *Scanner {
@@ -55,6 +58,8 @@ func NewWithOptions(db *sql.DB, maxDepth int, options Options) *Scanner {
 	}
 	return &Scanner{db: db, maxDepth: maxDepth, options: options, provider: NewSnapshotProvider(options.CommandTimeout)}
 }
+
+func (s *Scanner) SetAgentID(agentID string) { s.agentID = agentID }
 
 // folderSize menyimpan akumulasi ukuran tiap folder pada level <= maxDepth.
 type folderSize struct {
@@ -356,9 +361,9 @@ func (s *Scanner) persistMetrics(drive string, sizes map[string]folderMetric, re
 	}
 
 	res, err := tx.Exec(
-		`INSERT INTO scan_history (scan_date, drive_letter, total_size_bytes, total_allocated_bytes, status, skipped_count, consistency)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		now, drive, result.TotalSizeBytes, result.TotalAllocatedBytes, result.Status, result.SkippedCount, result.Consistency,
+		`INSERT INTO scan_history (scan_date, drive_letter, total_size_bytes, total_allocated_bytes, status, skipped_count, consistency, finished_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		now, drive, result.TotalSizeBytes, result.TotalAllocatedBytes, result.Status, result.SkippedCount, result.Consistency, now,
 	)
 	if err != nil {
 		return fmt.Errorf("gagal insert scan_history: %w", err)
@@ -378,6 +383,9 @@ func (s *Scanner) persistMetrics(drive string, sizes map[string]folderMetric, re
 		if _, err := stmt.Exec(scanID, now, drive, path, depthOf(drive, path), metric.Logical, metric.Allocated); err != nil {
 			return fmt.Errorf("gagal menyimpan snapshot folder %q: %w", path, err)
 		}
+	}
+	if err := storage.EnqueueScanOutboxTx(tx, s.agentID, drive, scanID, now); err != nil {
+		return err
 	}
 
 	return tx.Commit()
