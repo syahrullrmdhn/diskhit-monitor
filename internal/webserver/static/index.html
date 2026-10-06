@@ -257,7 +257,9 @@
             <option value="7" selected>Mingguan (dibanding ≥7 hari lalu)</option>
             <option value="30">Bulanan (dibanding ≥30 hari lalu)</option>
           </select>
-          <button class="btn-export" onclick="exportCSV()">Export CSV</button>
+      <button class="btn-export" onclick="exportCSV()">Export CSV</button>
+          <button class="btn-primary" id="updateButton" onclick="requestUpdate()">Update DiskHist</button>
+          <span id="updateStatus" class="stat-sub"></span>
         </div>
       </div>
       <div class="panel-body" style="padding:0;">
@@ -511,6 +513,31 @@
       }
     }
 
+    async function requestUpdate() {
+      const button = document.getElementById('updateButton');
+      const label = document.getElementById('updateStatus');
+      button.disabled = true;
+      try {
+        const resp = await fetch('/api/update', { method: 'POST' });
+        const data = await resp.json();
+        label.textContent = resp.status === 202 ? 'Update started; this page may reload.' : (data.error || 'Update unavailable');
+      } catch (e) {
+        label.textContent = 'Update request failed';
+      }
+      pollUpdateStatus();
+    }
+
+    async function pollUpdateStatus() {
+      try {
+        const data = await (await fetch('/api/update-status')).json();
+        const label = document.getElementById('updateStatus');
+        const button = document.getElementById('updateButton');
+        button.disabled = data.running;
+        if (data.running) label.textContent = 'Update running...';
+        else if (data.finished_at) label.textContent = data.error ? 'Update failed' : 'Update finished; refresh if needed.';
+      } catch (e) {}
+    }
+
     // --- Export ---
     function exportCSV() {
       const days = document.getElementById('daysSelect').value;
@@ -521,7 +548,9 @@
     loadHealth();
     loadTopGrowers();
     loadScanHistory();
+    pollUpdateStatus();
     setInterval(loadHealth, 30000); // refresh health every 30s
+    setInterval(pollUpdateStatus, 5000);
   </script>
 </body>
 </html>

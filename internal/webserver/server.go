@@ -15,6 +15,7 @@ type Server struct {
 	httpServer *http.Server
 	status     *StatusTracker
 	db         *sql.DB
+	update     updateState
 }
 
 // New membuat web server yang BIND KE LOCALHOST SAJA (127.0.0.1),
@@ -38,6 +39,8 @@ func New(bindAddress string, port int, status *StatusTracker, db *sql.DB) *Serve
 	mux.HandleFunc("/api/folder-history", srv.recoverMiddleware(srv.handleFolderHistory))
 	mux.HandleFunc("/api/export-csv", srv.recoverMiddleware(srv.handleExportCSV))
 	mux.HandleFunc("/api/scan-history", srv.recoverMiddleware(srv.handleScanHistory))
+	mux.HandleFunc("/api/update", srv.recoverMiddleware(srv.handleUpdate))
+	mux.HandleFunc("/api/update-status", srv.recoverMiddleware(srv.handleUpdateStatus))
 	mux.HandleFunc("/", srv.recoverMiddleware(srv.handleDashboard))
 
 	return srv

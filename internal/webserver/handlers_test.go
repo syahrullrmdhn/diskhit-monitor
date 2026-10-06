@@ -3,14 +3,87 @@ package webserver
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"diskhist-monitor/internal/storage"
 )
+
+type fakeUpdateProcess struct{}
+
+func (fakeUpdateProcess) Wait() error { return nil }
+
+type blockingUpdateProcess struct{ done <-chan struct{} }
+
+func (p blockingUpdateProcess) Wait() error { <-p.done; return errors.New("stopped") }
+
+func TestUpdateRejectsNonWindows(t *testing.T) {
+	srv := &Server{}
+	oldGOOS := updateGOOS
+	updateGOOS = "linux"
+	t.Cleanup(func() { updateGOOS = oldGOOS })
+	rec := httptest.NewRecorder()
+	srv.handleUpdate(rec, httptest.NewRequest(http.MethodPost, "/api/update", nil))
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateAcceptsAndTracksDetachedUpdater(t *testing.T) {
+	srv := &Server{}
+	oldGOOS, oldLaunch := updateGOOS, launchUpdater
+	updateGOOS = "windows"
+	started := make(chan struct{})
+	launchUpdater = func() (updateProcess, error) { close(started); return fakeUpdateProcess{}, nil }
+	t.Cleanup(func() { updateGOOS, launchUpdater = oldGOOS, oldLaunch })
+	rec := httptest.NewRecorder()
+	srv.handleUpdate(rec, httptest.NewRequest(http.MethodPost, "/api/update", nil))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	<-started
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["accepted"] != true || body["status"] != "running" {
+		t.Fatalf("unexpected response: %s", rec.Body.String())
+	}
+}
+
+func TestUpdateRejectsConcurrentRun(t *testing.T) {
+	srv := &Server{}
+	oldGOOS, oldLaunch := updateGOOS, launchUpdater
+	updateGOOS = "windows"
+	block := make(chan struct{})
+	launchUpdater = func() (updateProcess, error) { return blockingUpdateProcess{done: block}, nil }
+	t.Cleanup(func() { close(block); updateGOOS, launchUpdater = oldGOOS, oldLaunch })
+	first := httptest.NewRecorder()
+	srv.handleUpdate(first, httptest.NewRequest(http.MethodPost, "/api/update", nil))
+	second := httptest.NewRecorder()
+	srv.handleUpdate(second, httptest.NewRequest(http.MethodPost, "/api/update", nil))
+	if second.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", second.Code, second.Body.String())
+	}
+}
+
+func TestUpdateStatusDoesNotExposeUpdaterDetails(t *testing.T) {
+	srv := &Server{}
+	srv.update.running = true
+	srv.update.startedAt = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	srv.update.errText = "secret-token-and-path"
+	rec := httptest.NewRecorder()
+	srv.handleUpdateStatus(rec, httptest.NewRequest(http.MethodGet, "/api/update-status", nil))
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "secret-token-and-path") {
+		t.Fatalf("unsafe status response: %d %s", rec.Code, rec.Body.String())
+	}
+}
 
 func TestParsePeriod(t *testing.T) {
 	tests := []struct {
