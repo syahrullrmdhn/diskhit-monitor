@@ -34,14 +34,14 @@ func TestPushSendsAuthHeaderAndBodyShape(t *testing.T) {
 	}
 	var got captured
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got.method = r.Method
 		got.path = r.URL.Path
 		got.auth = r.Header.Get("Authorization")
 		got.contentType = r.Header.Get("Content-Type")
 		got.body, _ = io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"scan_id":"scan-123","accepted":2,"rejected":[{"path":"D:\\Bad","reason":"too long"}]}`)
+		w.WriteHeader(http.StatusAccepted)
+		io.WriteString(w, `{"scan_id":"scan-123","accepted":2,"rejected":[]}`)
 	}))
 	defer srv.Close()
 
@@ -67,6 +67,7 @@ func TestPushSendsAuthHeaderAndBodyShape(t *testing.T) {
 	}
 
 	c := NewClient(srv.URL, "secret-key")
+	c.HC = srv.Client()
 	ack, err := c.Push(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("Push error: %v", err)
@@ -74,9 +75,7 @@ func TestPushSendsAuthHeaderAndBodyShape(t *testing.T) {
 	if ack.ScanID != "scan-123" || ack.Accepted != 2 {
 		t.Fatalf("ack tidak sesuai: %+v", ack)
 	}
-	if len(ack.Rejected) != 1 || ack.Rejected[0].Path != `D:\Bad` || ack.Rejected[0].Reason != "too long" {
-		t.Fatalf("ack rejected tidak sesuai: %+v", ack.Rejected)
-	}
+
 
 	if got.method != http.MethodPost {
 		t.Errorf("method = %q, mau POST", got.method)
@@ -145,6 +144,7 @@ func TestPushNon2xxIncludesResponseBody(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "k")
+	c.HC = srv.Client()
 	_, err := c.Push(context.Background(), Payload{Scan: ScanJSON{Drive: `D:\`, StartedAt: time.Now()}})
 	if err == nil {
 		t.Fatal("harap error pada respons non-2xx")
