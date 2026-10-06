@@ -85,9 +85,6 @@ func (w *outboxWorker) processOne(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if item.Attempts >= w.maxAttempts {
-		return storage.MarkOutboxDeadLetter(w.db, item.ID, "dead-letter: retry limit reached", time.Now().UTC())
-	}
 	payload, err := report.LoadScanByID(ctx, w.db, item.ScanID)
 	if err == nil {
 		payload.IdempotencyKey = item.IdempotencyKey

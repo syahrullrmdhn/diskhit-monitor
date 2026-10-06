@@ -77,6 +77,52 @@ func TestReportWorkerPushesClaimedScanByExactID(t *testing.T) {
 	}
 }
 
+func TestReportWorkerMakesConfiguredFinalAttempt(t *testing.T) {
+	store, err := storage.Open(filepath.Join(t.TempDir(), "diskhist.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	scanID := insertWorkerScan(t, store.DB(), `D:\`, 1)
+	if err := storage.EnqueueScanOutbox(store.DB(), "agent", `D:\`, scanID); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"scan_id":"remote-1","accepted":1}`))
+	}))
+	defer ts.Close()
+	client := report.NewClient(ts.URL, "key")
+	client.Retry.MaxAttempts = 1
+	worker := newReportWorker(store.DB(), client, time.Millisecond, 3)
+	ctx := context.Background()
+
+	if err := worker.processOne(ctx); err == nil {
+		t.Fatal("first attempt unexpectedly succeeded")
+	}
+	if err := worker.processOne(ctx); err == nil {
+		t.Fatal("second attempt unexpectedly succeeded")
+	}
+	if err := worker.processOne(ctx); err != nil {
+		t.Fatalf("final attempt failed: %v", err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("push calls=%d, want 3", got)
+	}
+	var status string
+	if err := store.DB().QueryRow(`SELECT status FROM scan_outbox WHERE scan_id=?`, scanID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "sent" {
+		t.Fatalf("outbox status=%q, want sent", status)
+	}
+}
+
 func TestReportWorkerReturnsOnCancellation(t *testing.T) {
 	store, err := storage.Open(filepath.Join(t.TempDir(), "diskhist.db"))
 	if err != nil {
