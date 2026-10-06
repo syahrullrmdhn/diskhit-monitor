@@ -37,14 +37,45 @@ Buka browser ke `http://localhost:8787` atau cek `http://localhost:8787/healthz`
 > Catatan: Untuk testing lokal, ubah `database_path` dan `log_path` di `config.yaml`
 > ke path lokal, misal `./diskhist.db` dan `./agent.log`.
 
-## Cara Build untuk Produksi (Windows)
+## Paket rilis satu-folder (Windows)
+
+Rilis resmi adalah satu ZIP yang berisi `diskhist.exe`, `config.yaml`, `README.md`,
+`update-diskhist.bat`, dan `SHA256SUMS.txt`. Skrip packaging membuat build Windows
+amd64, checksum binary, dan ZIP secara reproducible:
 
 ```bash
-# Cross-compile dari Linux/Mac
-GOOS=windows GOARCH=amd64 go build -o diskhist.exe ./cmd/diskhist
+VERSION=1.0.0 SOURCE_DATE_EPOCH=0 ./scripts/package-release.sh
+# hasil: dist/diskhist-windows-amd64-1.0.0.zip
+```
 
-# Atau build langsung di Windows
-go build -o diskhist.exe ./cmd/diskhist
+### Instalasi dan update satu paket
+
+1. Unduh `diskhist-windows-amd64-<versi>.zip` dan verifikasi checksum arsip menggunakan `dist/SHA256SUMS-ARCHIVE.txt` atau checksum rilis.
+2. Ekstrak seluruh ZIP ke satu folder instalasi, misalnya `C:\Program Files\DiskHistMonitor\`. Jangan memindahkan atau mengganti nama file di dalam folder tersebut.
+3. Edit `config.yaml` di folder yang sama, lalu buka PowerShell sebagai Administrator dan jalankan:
+
+```powershell
+cd 'C:\Program Files\DiskHistMonitor'
+.\diskhist.exe install
+sc.exe failure "DiskHistMonitor" reset= 86400 actions= restart/60000/restart/300000/restart/600000
+sc.exe start DiskHistMonitor
+```
+
+4. Untuk update manual, ekstrak paket versi baru ke folder sementara, lalu salin `diskhist.exe`, `README.md`, dan `update-diskhist.bat` ke folder instalasi. Pertahankan `config.yaml` yang sudah dipakai instalasi (salin `config.yaml` dari paket hanya jika memang ingin mengganti konfigurasi). Jangan menimpa data runtime di `%ProgramData%\DiskHistMonitor`. Atau gunakan tombol **Update** di dashboard.
+5. Tombol **Update** web hanya berfungsi jika `update-diskhist.bat` berada di folder yang sama dengan `diskhist.exe`; tombol tersebut menjalankan updater di sebelah executable. Updater mengunduh rilis terbaru, memverifikasi SHA-256, membuat backup, mengganti binary, dan melakukan rollback jika health check gagal.
+
+Untuk penghapusan service:
+
+```powershell
+sc.exe stop DiskHistMonitor
+.\diskhist.exe uninstall
+```
+
+### Build untuk produksi (Windows)
+
+```bash
+# Cross-compile langsung (untuk build manual; paket rilis memakai scripts/package-release.sh)
+GOOS=windows GOARCH=amd64 /usr/local/go/bin/go build -o diskhist.exe ./cmd/diskhist
 ```
 
 ### Install sebagai Windows Service
